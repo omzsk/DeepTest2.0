@@ -77,6 +77,33 @@ def _adb_path() -> str:
     raise RuntimeError("ADB is not installed or available in the bundled Platform Tools.")
 
 
+def _root_helper_environment() -> dict[str, str]:
+    env = os.environ.copy()
+    if os.name == "nt":
+        # The GUI locates its bundled adb.exe by absolute path, but the
+        # version-specific batch helpers invoke plain `adb`.
+        adb_dir = os.path.dirname(os.path.abspath(_adb_path()))
+        env["PATH"] = adb_dir + os.pathsep + env.get("PATH", "")
+    elif getattr(sys, "frozen", False):
+        original = env.pop("LD_LIBRARY_PATH_ORIG", "")
+        if original:
+            env["LD_LIBRARY_PATH"] = original
+        else:
+            env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+
+def _root_helper_command(script: Path) -> list[str]:
+    if os.name == "nt":
+        # Use UTF-8 for localized cmd.exe diagnostics so they remain readable
+        # in the live Technical Log.
+        return [
+            "cmd.exe", "/d", "/s", "/c",
+            f'chcp 65001>nul & call "{script}"',
+        ]
+    return ["/bin/sh", str(script)]
+
+
 class Api:
     def __init__(self) -> None:
         self.settings = dict(DEFAULTS)
@@ -423,13 +450,7 @@ class Api:
             custom_preload = self.custom_preload
             if custom_preload and not custom_preload.is_file():
                 raise RuntimeError("The selected custom preload.so is no longer available.")
-            env = os.environ.copy()
-            if os.name != "nt" and getattr(sys, "frozen", False):
-                original = env.pop("LD_LIBRARY_PATH_ORIG", "")
-                if original:
-                    env["LD_LIBRARY_PATH"] = original
-                else:
-                    env.pop("LD_LIBRARY_PATH", None)
+            env = _root_helper_environment()
             with tempfile.TemporaryDirectory(prefix="deeptest-root-") if custom_preload else nullcontext(directory) as work_dir:
                 work_path = Path(work_dir)
                 active_script = script
@@ -440,7 +461,7 @@ class Api:
                     self.log += f"$ using custom preload: {custom_preload.name}\n"
                 else:
                     self.log += "$ using bundled preload.so\n"
-                command = ["cmd", "/c", str(active_script)] if os.name == "nt" else ["/bin/sh", str(active_script)]
+                command = _root_helper_command(active_script)
                 process = subprocess.Popen(
                     command, cwd=work_path, stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT, text=True, encoding="utf-8",

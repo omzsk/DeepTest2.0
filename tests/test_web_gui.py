@@ -4,7 +4,12 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
 
 from deeptesting.unlock_helper import DeviceReadiness
-from deeptesting.web_gui import Api, DEVICE_PROFILES
+from deeptesting.web_gui import (
+    Api,
+    DEVICE_PROFILES,
+    _root_helper_command,
+    _root_helper_environment,
+)
 
 
 class DeviceProfileTests(TestCase):
@@ -69,6 +74,31 @@ class CommandOutputTests(TestCase):
             output = api._command("deeptesting.cli", ["get-apply-status"])
 
         self.assertEqual(output, "captured response")
+
+
+class WindowsRootHelperTests(TestCase):
+    @mock.patch(
+        "deeptesting.web_gui._adb_path",
+        return_value="/bundle/platform-tools/adb.exe",
+    )
+    def test_bundled_adb_directory_is_added_to_helper_path(self, adb_path) -> None:
+        with mock.patch("deeptesting.web_gui.os.name", "nt"), mock.patch.dict(
+            "deeptesting.web_gui.os.environ", {"PATH": "existing-path"}, clear=True
+        ):
+            env = _root_helper_environment()
+
+        self.assertTrue(env["PATH"].startswith("/bundle/platform-tools"))
+        self.assertTrue(env["PATH"].endswith("existing-path"))
+
+    def test_windows_helper_uses_utf8_command_prompt(self) -> None:
+        script = Path("C:/DeepTest/root.bat")
+
+        with mock.patch("deeptesting.web_gui.os.name", "nt"):
+            command = _root_helper_command(script)
+
+        self.assertEqual(command[:4], ["cmd.exe", "/d", "/s", "/c"])
+        self.assertIn("chcp 65001", command[4])
+        self.assertIn('call "C:/DeepTest/root.bat"', command[4])
 
 
 class CustomPreloadTests(TestCase):
